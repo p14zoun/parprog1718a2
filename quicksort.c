@@ -1,162 +1,32 @@
-// Barrier usage example.
-// Compile with: gcc -O2 -Wall -pthread barrier-example.c -o barrier-example
-
-// IMPORTANT NOTE: borrowed from GPU massively/fine grained parallel world,
-// this reduction method is NOT suitable for real apps with pthreads!!!
-
 #include <stdio.h>
 #include <stdlib.h>
-
 #include <pthread.h>
-#define COUNT_MAX 20
-#define CUTOFF 10
-#define MESSAGES 20
-// size of array for reduction
-#define N 10000
-// number of threads - MUST be power of 2
+
 #define THREADS 4
+#define CUTOFF 1000
+#define N 1000
 
-// how many elements a thread will process - NOTE: surrounding ()!
-#define BLOCKSIZE  ((N+THREADS-1)/THREADS)
 
-// struct of info passed to each thread
-struct thread_params {
-  int *start;	// pointer to start of thread's portion
-  int *out;	// where to write partial sum
-  int n;	// how many consecutive elements to process
-  int id;	// thread's id
+
+struct params
+{
+	double *start;		//deixnei sto prwto keli toy pinaka pou tha ginei sort
+	int end;			    //deixnei sto teleutaio keli toy pinaka
+	int shutdown;		  //otan ginei sort o pinakas ginetai 1
 };
 
-// thread syncing barrier
-pthread_barrier_t barrier;
+struct params circlr_buf[CIRCLR_BUF_SIZE]; //	pinakas me arithmo kelion [CIRCLR_BUF_SIZE]
 
-// the thread work function
-void *thread_func(void *args) {
-struct thread_params *tparm;
-int *pa,*out;
-int i,n,sum,id,stride;
+int q_insert = 0;	//arithmos kelion buffer
+int q_output = 0;
 
-  // thread input params
-  tparm = (struct thread_params *)args;
-  pa = tparm->start;
-  n = tparm->n;
-  out = tparm->out;
-  id = tparm->id;
-
-  // phase 1: each thread reduces its part
-  sum = 0;
-  for (i=0;i<n;i++) {
-    sum += pa[i];
-  }
-  // store partial sum
-  *out = sum;
-  printf("Thread %d: partial sum=%d\n",id,sum);
-
-  // phase 2: half of threads in each round sum a pair of values
-  for (stride=1;stride<THREADS;stride*=2) {
-    // sync on barrier, for all threads
-    pthread_barrier_wait(&barrier); // after sync, barrier goes to its init() state
-
-    if (id%(2*stride)==0) { // half of previous round
-      // NOTE: this printf will show that all operations with same stride are together thanks to barrier
-      printf("Thread %d: summing %d + %d (stride is %d)\n",id,*out,*(out+stride),stride);
-      *out = (*out)+*(out+stride);
-    }
-  }
-
-  // exit and let be joined
-  pthread_exit(NULL);
-}
-
-void *consumer_thread(void *args) {
-    int global_availmsg = 0;	// empty
-int global_buffer;
-  int i;
-
-  // receive a predefined number of messages
-  for (i=0;i<MESSAGES;i++) {
-    // lock mutex
-    pthread_mutex_lock(&mutex);
-    while (global_availmsg<1) {	// NOTE: we use while instead of if! more than one thread may wake up
-     // pthread_cond_wait(&msg_in,&mutex);
-    }
-    // receive message
-    printf("Consumer: received msg %d\n",global_buffer);
+pthread_cond_t msg_in = PTHREAD_COND_INITIALIZER;
+pthread_cond_t msg_out = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
-    // signal the sender that something was removed from buffer
-    pthread_cond_signal(&msg_out);
 
-    // unlock mutex
-    pthread_mutex_unlock(&mutex);
-  }
-
-  // exit and let be joined
-  pthread_exit(NULL);
-}
-
-void *producer_thread(void *args) {
-    
-  int i;
-    int global_buffer = i;
-    int global_availmsg = 1;
-  // send a predefined number of messages
-  for (i=0;i<MESSAGES;i++) {
-    // lock mutex
-    pthread_mutex_lock(&mutex);
-    while (global_availmsg>0) {	// NOTE: we use while instead of if! more than one thread may wake up
-
-      pthread_cond_wait(&msg_out,&mutex);  // wait until a msg is received - NOTE: mutex MUST be locked here.
-      					   // If thread is going to wait, mutex is unlocked automatically.
-      					   // When we wake up, mutex will be locked by us again.
-    }
-    // send message
-    printf("Producer: sending msg %d\n",i);
-
-
-    // signal the receiver that something was put in buffer
-    pthread_cond_signal(&msg_in);
-
-    // unlock mutex
-    pthread_mutex_unlock(&mutex);
-  }
-
-  // exit and let be joined
-  pthread_exit(NULL);
-}
-
-
-// sample thread function
-void *thread_func(void *args) {
-    int global_count = 0;
-  int myid = ((struct thread_params*)args)->myid;
-  int done = 0;
-  while (done==0) {
-    // lock count mutex
-    pthread_mutex_lock(&count_mutex);
-    printf("Thread %d: got count %d",myid,global_count);
-    if (global_count>=COUNT_MAX) {
-      done = 1;
-      printf(", terminating.\n");
-    }
-    else {
-      global_count++;
-      printf(", incrementing.\n");
-    }
-    // unlock count mutex
-    pthread_mutex_unlock(&count_mutex);
-
-    // simulate some work
-    sleep(1);
-
-  }
-
-  // exit and let be joined
-  pthread_exit(NULL);
-}
-
-
-void inssort(double *a,int n) {
+void inssort(double *a,int n) { //inssort apo kwdika stef
 int i,j;
 double t;
 
@@ -171,28 +41,27 @@ double t;
 }
 
 
-void quicksort(double *a,int n) {
+void quicksort(double *a,int n) { //quicksort apo kwdika stef
 int first,last,middle;
 double t,p;
 int i,j;
 
-  // check if below cutoff limit
+//an einai mikrotero toy cutoff pou oristike stin arxi
   if (n<=CUTOFF) {
     inssort(a,n);
     return;
   }
 
-  // take first, last and middle positions
   first = 0;
   middle = n-1;
   last = n/2;
 
-  // put median-of-3 in the middle
   if (a[middle]<a[first]) { t = a[middle]; a[middle] = a[first]; a[first] = t; }
   if (a[last]<a[middle]) { t = a[last]; a[last] = a[middle]; a[middle] = t; }
   if (a[middle]<a[first]) { t = a[middle]; a[middle] = a[first]; a[first] = t; }
 
-  // partition (first and last are already in correct half)
+
+//xorisma toy pinaka sti mesi (middle)
   p = a[middle]; // pivot
   for (i=1,j=n-2;;i++,j--) {
     while (a[i]<p) i++;
@@ -202,140 +71,112 @@ int i,j;
     t = a[i]; a[i] = a[j]; a[j] = t;
   }
 
-  // recursively sort halves
   quicksort(a,i);
   quicksort(a+i,n-i);
 
 }
 
-//------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
 
 
-int main() {
-    
-    // condition variable, signals a put operation (receiver waits on this)
-pthread_cond_t msg_in = PTHREAD_COND_INITIALIZER;
-// condition variable, signals a get operation (sender waits on this)
-pthread_cond_t msg_out = PTHREAD_COND_INITIALIZER;
-int *a;
-int i,check;
-// array of structs to fill and pass to threads on creation
-struct thread_params tparm[THREADS];
-// table of thread IDs (handles) filled on creation, to be used later on join
-pthread_t threads[THREADS];
+void *work(void *tp) {
+  double *a;
+  int n;
+  int i;
+  struct thread_params *tparm;
+  tparm = (struct thread_params *)tp;
+  printf("Hello\n");
+  a = tparm->a;
+  n = tparm->n;
 
-// partial reduction table - one element per thread
-int partial[THREADS];
 
-  // initialize barrier - always on all threads
-  pthread_barrier_init (&barrier, NULL, THREADS);
+  if(n < LIMIT) {
+    quicksort(a, n);
+  }
+  else {
+    i = partition(a, n);
+    pthread_t child_0, child_1;
+    struct thread_params ch_0, ch_1;
+    ch_0.a = a;
+    ch_0.n = i;
+    pthread_create(&child_0, NULL, work, &ch_0);
 
-  // allocate vector array
-  a = (int *)malloc(N*sizeof(int));
-  if (a==NULL) exit(1);
+    ch_1.a = a + i;
+    ch_1.n = n - i;
+    pthread_create(&child_1, NULL, work, &ch_1);
 
-  //initialize vector
-  for (i=0;i<N;i++) {
-    a[i]=i+1;	// 1...N
+    pthread_join(child_0, NULL);
+    pthread_join(child_1, NULL);
   }
 
-  // create all threads
-  check = 0;
-  for (i=0;i<THREADS;i++) {
-    // fill params for this thread
-    tparm[i].start = a+i*BLOCKSIZE;
-    tparm[i].id = i;
-    tparm[i].out = &partial[i];
-    if ((check+BLOCKSIZE)>=N) { // less than blocksize to do...
-      tparm[i].n = N-check;
-    }
-    else {
-      tparm[i].n = BLOCKSIZE; // there IS blocksize work to do!
-    }
-    check += BLOCKSIZE;
-
-    // create thread with default attrs (attrs=NULL)
-    if (pthread_create(&threads[i],NULL,thread_func,&tparm[i])!=0) {
-      printf("Error in thread creation!\n");
-      exit(1);
-    }
-  }
-
-  // block on join of threads
-  for (i=0;i<THREADS;i++) {
-    pthread_join(threads[i],NULL);
-  }
+  pthread_exit(NULL);
+}
 
 
-  // check results
-  if (partial[0]!=((N*(N+1))/2)) {
-    printf("computation error!\n");
-  }
-  // free vector
-  free(a);
+int main()
+{
+	printf("Hello World!\n");
 
+double *a;
+int i;
+struct thread_params tp;
 
-// mutex protecting common resources
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+// gemizei ton pinaka me random times
+srand(time(NULL));
+for (i=0;i<N;i++) {
+	a[i] = (double)rand()/RAND_MAX;
+}
 
-
-  pthread_t producer,consumer;
-
-  // create threads
-  pthread_create(&producer,NULL,producer_thread,NULL);
-  pthread_create(&consumer,NULL,consumer_thread,NULL);
-
-  // then join threads
-  pthread_join(producer,NULL);
-  pthread_join(consumer,NULL);
-
-  // destroy mutex - should be unlocked
-  pthread_mutex_destroy(&mutex);
-
-  // destroy cvs - no process should be waiting on these
-  pthread_cond_destroy(&msg_out);
-  pthread_cond_destroy(&msg_in);
-
-
-// mutex protecting count variable
-pthread_mutex_t count_mutex = PTHREAD_MUTEX_INITIALIZER;
+tp.a = a;
+tp.n = N;
 
 
 
+//thread_pool
+	int thread_number;
+
+	pthread_t thread_pool[THREADS];
 
 
-  // thread ids (opaque handles) - used for join
-  pthread_t threadids[THREADS];
-thread_params tparm[THREADS];
-  // array of structs to fill and pass to threads on creation
+	for(thread_number=0; thread_number<THREADS; thread_number++)
+	{
+
+		if (pthread_create(&thread_pool[thread_number], NULL, work, NULL)!=0)
+
+		{
+     		printf("Error in thread creation!\n");
+      		exit(1);
+		}
+		printf("Thread %d created!\n", thread_number);
+	}
 
 
-  // create threads
-  for (i=0;i<THREADS;i++) {
-    tparm[i].myid = i;
-    pthread_create(&threadids[i],NULL,thread_func,&tparm[i]);
-  }
+	for(thread_number=0; thread_number<THREADS; thread_number++)
+	{
+		pthread_join(thread_pool[thread_number], NULL);
+		printf("Thread %d joined!\n", thread_number);
+	}
 
-
-  a = (double *)malloc(N*sizeof(double));
+//ftiaxnei enan pinaka me malloc kai ton gemizei me random arithmous
+a = (double *)malloc(N*sizeof(double));
   if (a==NULL) {
     printf("error in malloc\n");
     exit(1);
   }
 
-  // fill array with random numbers
-  srand(time(NULL));
-  for (i=0;i<N;i++) {
-    a[i] = (double)rand()/RAND_MAX;
-  }
 
-  // then join threads
-  for (i=0;i<THREADS;i++) {
-    pthread_join(threadids[i],NULL);
-  }
-  return 0;
+
+
+
+// checkarei an egine sorting ston pinaka
+ for (i=0;i<(N-1);i++) {
+	 if (a[i]>a[i+1]) {
+		 printf("Sort failed!\n");
+		 break;}
+		 else {
+		 shutdown=1; //epistrefei shutdown=1 an exei ginei sortarisma ston pinaka
+	 }
+
+	return 0;
 }
-
-
