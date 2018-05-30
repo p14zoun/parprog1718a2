@@ -175,7 +175,7 @@ a = (double *)malloc(N*sizeof(double));
 		 printf("Sort failed!\n");
 		 break;}
 		 else {
-		 shutdown=1; //epistrefei shutdown=1 an exei ginei sortarisma ston pinaka
+		 shutdown=1; //to shutdown ginetai 1 gia na stamatisoyn ta theads na ektelountai 
 	 }
 
 	return 0;
